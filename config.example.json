@@ -1,0 +1,8 @@
+{
+  "fail2ban_log": "/var/log/fail2ban.log",
+  "database_path": "data/guardianfail.db",
+  "telegram_bot_token": "TU_BOT_TOKEN",
+  "telegram_chat_id": "TU_CHAT_ID",
+  "own_server_ip": "TU_IP_PUBLICA_OPCIONAL",
+  "enable_own_server_audit": false
+}
