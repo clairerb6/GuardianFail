@@ -34,6 +34,8 @@ Esto permite que un administrador pueda recibir información resumida sin revisa
 
 El proyecto tiene un enfoque completamente defensivo. No realiza escaneos ni acciones activas contra terceros. Su análisis se limita a eventos ya registrados en infraestructura propia.
 
+Adicionalmente, el sistema incorpora mecanismos de mantenibilidad y operación segura: retención automática de eventos históricos en SQLite para evitar crecimiento indefinido de la base, logging estructurado para trazabilidad y ejecución por línea de comandos con opciones de control por ejecución.
+
 ---
 
 ## 4. Objetivo general
@@ -64,6 +66,8 @@ Posteriormente, el sistema analiza la información recopilada y genera un report
 
 El reporte puede ser visualizado en consola, almacenado como archivo de texto y enviado automáticamente mediante Telegram.
 
+La solución contempla una política de retención configurable (`event_retention_days`) que elimina eventos antiguos de la tabla `events` en cada ejecución. Para optimizar esta limpieza, se utiliza un índice en `event_datetime`.
+
 ---
 
 ## 7. Tecnologías utilizadas
@@ -77,6 +81,9 @@ El reporte puede ser visualizado en consola, almacenado como archivo de texto y 
 | Requests | Comunicación HTTP con Telegram |
 | Linux | Entorno natural de ejecución |
 | Cron / systemd timer | Automatización por horario |
+| argparse | Interfaz CLI con flags de control |
+| logging | Registro estructurado de eventos operativos |
+| unittest | Pruebas automatizadas del prototipo |
 
 ---
 
@@ -132,6 +139,11 @@ El reporte puede ser visualizado en consola, almacenado como archivo de texto y 
 8. Se genera un reporte.
 9. El reporte se envía automáticamente por Telegram.
 
+Notas operativas del flujo actual:
+- Se aplica retención automática de eventos históricos según la configuración.
+- Se emiten logs estructurados para depuración y trazabilidad.
+- Puede ejecutarse en modo `dry-run` para análisis sin persistencia.
+
 ---
 
 ## 10. Ejemplo de reporte generado
@@ -165,6 +177,37 @@ Nota ética:
 Este sistema analiza eventos registrados en infraestructura propia.
 No realiza escaneos ni acciones activas contra terceros.
 ```
+---
+
+## 10.1 Configuración y operación CLI
+
+El prototipo permite ejecutar análisis con control operativo por argumentos:
+
+- `--config`: permite seleccionar un archivo de configuración específico.
+- `--dry-run`: procesa el log sin persistir eventos ni generar archivo de reporte.
+- `--no-telegram`: omite el envío de reporte por Telegram para la ejecución actual.
+- `--log-level`: ajusta el nivel de logs en runtime (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`).
+
+Configuración relevante del archivo JSON:
+
+- `event_retention_days`: días de retención de eventos históricos en SQLite.
+- `log_level`: nivel de logging por defecto cuando no se especifica `--log-level`.
+
+---
+
+## 10.2 Calidad y pruebas automatizadas
+
+El proyecto incluye pruebas automatizadas con `unittest` para componentes críticos:
+
+- Parsing de eventos de Fail2Ban.
+- Validación de configuración (`config.json`).
+- Cálculo de nivel de riesgo.
+- Retención y poda de eventos antiguos.
+- Creación del índice SQLite para rendimiento.
+- Parsing de argumentos CLI.
+
+Esto permite validar regresiones funcionales durante la evolución del prototipo.
+
 ---
 
 ## 11. Enfoque de innovación
@@ -201,6 +244,8 @@ GuardianFail es técnicamente viable porque utiliza herramientas conocidas, livi
 Python permite desarrollar el prototipo rápidamente, SQLite evita depender de un servidor de base de datos externo y Telegram facilita el envío de notificaciones sin necesidad de construir una aplicación móvil.
 
 El sistema puede ejecutarse de forma manual, mediante cron o a través de un servicio programado con systemd timer.
+
+Las mejoras incorporadas (retención automática, logging estructurado, CLI configurable y pruebas automatizadas) aumentan la viabilidad operativa y reducen riesgos de mantenimiento a medida que crece el volumen de eventos.
 
 ---
 

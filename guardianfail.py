@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
+import argparse
 import json
+import logging
 import os
 import re
 import sqlite3
 import requests
-from datetime import datetime
+from json import JSONDecodeError
+from datetime import datetime, timedelta
 from pathlib import Path
 
 
 DEFAULT_CONFIG = "config.json"
+VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+
+
+logger = logging.getLogger("guardianfail")
 
 
 BAN_REGEX = re.compile(
@@ -19,14 +26,78 @@ BAN_REGEX = re.compile(
 )
 
 
+def setup_logging(level_name: str) -> None:
+    level = getattr(logging, level_name.upper(), logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
+
+
+def log_event(event: str, **fields: object) -> None:
+    payload = {"event": event, **fields}
+    logger.info(json.dumps(payload, ensure_ascii=False))
+
+
 def load_config(config_path: str) -> dict:
     if not os.path.exists(config_path):
         raise FileNotFoundError(
             f"No existe {config_path}. Copia config.example.json como config.json y ajusta los valores."
         )
 
-    with open(config_path, "r", encoding="utf-8") as file:
-        return json.load(file)
+    try:
+        with open(config_path, "r", encoding="utf-8") as file:
+            config = json.load(file)
+    except JSONDecodeError as exc:
+        raise ValueError(
+            f"El archivo {config_path} no tiene JSON válido: {exc.msg} (línea {exc.lineno}, columna {exc.colno})."
+        ) from exc
+
+    validate_config(config)
+    return config
+
+
+def validate_config(config: dict) -> None:
+    required_str_fields = ["fail2ban_log", "database_path"]
+    optional_str_fields = ["telegram_bot_token", "telegram_chat_id", "own_server_ip"]
+    optional_bool_fields = ["enable_own_server_audit"]
+
+    if not isinstance(config, dict):
+        raise ValueError("La configuración debe ser un objeto JSON (diccionario).")
+
+    missing = [field for field in required_str_fields if field not in config]
+    if missing:
+        raise ValueError(
+            f"Faltan claves requeridas en config.json: {', '.join(missing)}."
+        )
+
+    for field in required_str_fields:
+        value = config.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"'{field}' debe ser un texto no vacío.")
+
+    for field in optional_str_fields:
+        value = config.get(field, "")
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            raise ValueError(f"'{field}' debe ser texto.")
+
+    for field in optional_bool_fields:
+        value = config.get(field, False)
+        if value is None:
+            continue
+        if not isinstance(value, bool):
+            raise ValueError(f"'{field}' debe ser true o false.")
+
+    retention_days = config.get("event_retention_days", 90)
+    if not isinstance(retention_days, int) or retention_days < 1:
+        raise ValueError("'event_retention_days' debe ser un entero mayor o igual a 1.")
+
+    log_level = config.get("log_level", "INFO")
+    if not isinstance(log_level, str) or log_level.upper() not in VALID_LOG_LEVELS:
+        valid = ", ".join(sorted(VALID_LOG_LEVELS))
+        raise ValueError(f"'log_level' debe ser uno de: {valid}.")
 
 
 def ensure_directories(config: dict) -> None:
@@ -59,6 +130,9 @@ def connect_db(db_path: str) -> sqlite3.Connection:
             raw_line TEXT NOT NULL
         )
     """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_events_event_datetime ON events(event_datetime)"
+    )
 
     conn.commit()
     return conn
@@ -138,6 +212,16 @@ def save_events(conn: sqlite3.Connection, events: list[dict]) -> dict:
         "repeated_ips": sorted(set(repeated_ips)),
         "total_events": len(events)
     }
+
+
+def prune_old_events(conn: sqlite3.Connection, retention_days: int) -> int:
+    cutoff = (datetime.now() - timedelta(days=retention_days)).strftime("%Y-%m-%d %H:%M:%S")
+    cursor = conn.execute(
+        "DELETE FROM events WHERE event_datetime < ?",
+        (cutoff,)
+    )
+    conn.commit()
+    return cursor.rowcount
 
 
 def calculate_risk(total_events: int, new_ips_count: int, repeated_ips_count: int) -> str:
@@ -236,7 +320,7 @@ def save_report(report: str) -> str:
 
 def send_telegram_message(bot_token: str, chat_id: str, message: str) -> None:
     if not bot_token or not chat_id:
-        print("Telegram no configurado. Se omite envío.")
+        log_event("telegram_skipped", reason="not_configured")
         return
 
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
@@ -249,29 +333,70 @@ def send_telegram_message(bot_token: str, chat_id: str, message: str) -> None:
     response.raise_for_status()
 
 
-def main() -> None:
-    config = load_config(DEFAULT_CONFIG)
-    ensure_directories(config)
-
-    conn = connect_db(config["database_path"])
-
-    events = parse_fail2ban_log(config["fail2ban_log"])
-    stats = save_events(conn, events)
-
-    report = generate_report(conn, stats)
-    report_path = save_report(report)
-
-    print(report)
-    print()
-    print(f"Reporte guardado en: {report_path}")
-
-    send_telegram_message(
-        bot_token=config.get("telegram_bot_token", ""),
-        chat_id=config.get("telegram_chat_id", ""),
-        message=report
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="GuardianFail - Inteligencia defensiva para logs de Fail2Ban")
+    parser.add_argument("--config", default=DEFAULT_CONFIG, help="Ruta al archivo de configuración JSON.")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Ejecuta análisis sin persistir datos ni guardar reportes en disco.",
     )
+    parser.add_argument(
+        "--no-telegram",
+        action="store_true",
+        help="Desactiva el envío de reportes por Telegram en esta ejecución.",
+    )
+    parser.add_argument(
+        "--log-level",
+        choices=sorted(VALID_LOG_LEVELS),
+        help="Nivel de logging para esta ejecución (sobrescribe config.json).",
+    )
+    return parser.parse_args()
 
-    conn.close()
+
+def main() -> None:
+    args = parse_args()
+    config = load_config(args.config)
+    effective_log_level = args.log_level or config.get("log_level", "INFO")
+    setup_logging(effective_log_level)
+    ensure_directories(config)
+    retention_days = config.get("event_retention_days", 90)
+    db_path = ":memory:" if args.dry_run else config["database_path"]
+    conn = connect_db(db_path)
+
+    try:
+        events = parse_fail2ban_log(config["fail2ban_log"])
+        log_event("events_parsed", total=len(events), dry_run=args.dry_run)
+        stats = save_events(conn, events)
+
+        pruned_count = 0
+        if not args.dry_run:
+            pruned_count = prune_old_events(conn, retention_days)
+            log_event("events_pruned", deleted=pruned_count, retention_days=retention_days)
+
+        report = generate_report(conn, stats)
+        print(report)
+
+        if args.dry_run:
+            log_event("dry_run_completed", note="No se guardó reporte ni se envió Telegram.")
+            return
+
+        report_path = save_report(report)
+        print()
+        print(f"Reporte guardado en: {report_path}")
+        print(f"Eventos antiguos eliminados por retención ({retention_days} días): {pruned_count}")
+
+        if args.no_telegram:
+            log_event("telegram_skipped", reason="disabled_by_flag")
+        else:
+            send_telegram_message(
+                bot_token=config.get("telegram_bot_token", ""),
+                chat_id=config.get("telegram_chat_id", ""),
+                message=report
+            )
+            log_event("telegram_sent", chat_id=config.get("telegram_chat_id", ""))
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":

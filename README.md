@@ -123,7 +123,9 @@ Editar config.json con los datos correspondientes:
   "telegram_bot_token": "TU_BOT_TOKEN",
   "telegram_chat_id": "TU_CHAT_ID",
   "own_server_ip": "",
-  "enable_own_server_audit": false
+  "enable_own_server_audit": false,
+  "event_retention_days": 90,
+  "log_level": "INFO"
 }
 ```
 ---
@@ -133,6 +135,20 @@ Editar config.json con los datos correspondientes:
 ```bash
 python guardianfail.py
 ```
+
+Opciones útiles de CLI:
+
+```bash
+python guardianfail.py --config config.json
+python guardianfail.py --dry-run
+python guardianfail.py --no-telegram
+python guardianfail.py --log-level DEBUG
+```
+
+- `--config`: usa un archivo de configuración específico.
+- `--dry-run`: analiza el log sin persistir eventos ni guardar reporte.
+- `--no-telegram`: omite envío a Telegram para esa ejecución.
+- `--log-level`: define nivel de logs en runtime (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`).
 
 Ejemplo de salida:
 
@@ -154,6 +170,8 @@ Top IPs registradas:
 - 14.xxx.xxx.xxx | Jail: sshd | Eventos: 1
 - 220.xxx.xxx.xxx | Jail: sshd | Eventos: 1
 ```
+
+Además, GuardianFail aplica retención automática en la tabla `events` según `event_retention_days` y mantiene un índice en `event_datetime` para optimizar la limpieza de eventos antiguos.
 ---
 ## 📲 Notificación por Telegram
 
