@@ -9,6 +9,14 @@ import requests
 from json import JSONDecodeError
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Callable
+
+try:
+    import geoip2.database
+    from geoip2.errors import AddressNotFoundError
+except ImportError:  # pragma: no cover
+    geoip2 = None
+    AddressNotFoundError = Exception
 
 
 DEFAULT_CONFIG = "config.json"
@@ -59,7 +67,7 @@ def load_config(config_path: str) -> dict:
 
 def validate_config(config: dict) -> None:
     required_str_fields = ["fail2ban_log", "database_path"]
-    optional_str_fields = ["telegram_bot_token", "telegram_chat_id", "own_server_ip"]
+    optional_str_fields = ["telegram_bot_token", "telegram_chat_id", "own_server_ip", "geoip_city_db_path"]
     optional_bool_fields = ["enable_own_server_audit"]
 
     if not isinstance(config, dict):
@@ -136,6 +144,20 @@ def connect_db(db_path: str) -> sqlite3.Connection:
 
     conn.commit()
     return conn
+
+
+def discover_geoip_city_db_path(base_dir: str = "GeoIP") -> str:
+    root = Path(base_dir)
+    if not root.exists():
+        return ""
+
+    direct = root / "GeoLite2-City.mmdb"
+    if direct.exists():
+        return str(direct)
+
+    for candidate in sorted(root.glob("**/GeoLite2-City.mmdb")):
+        return str(candidate)
+    return ""
 
 
 def parse_fail2ban_log(log_path: str) -> list[dict]:
@@ -258,7 +280,33 @@ def get_top_ips(conn: sqlite3.Connection, limit: int = 5) -> list[tuple]:
     ).fetchall()
 
 
-def generate_report(conn: sqlite3.Connection, stats: dict) -> str:
+def build_geoip_lookup(city_db_path: str) -> Callable[[str], str] | None:
+    if not city_db_path:
+        return None
+    if not os.path.exists(city_db_path):
+        log_event("geoip_skipped", reason="db_not_found", path=city_db_path)
+        return None
+    if geoip2 is None:
+        log_event("geoip_skipped", reason="geoip2_not_installed")
+        return None
+
+    reader = geoip2.database.Reader(city_db_path)
+
+    def lookup(ip: str) -> str:
+        try:
+            response = reader.city(ip)
+            country = response.country.name or "Desconocido"
+            city = response.city.name or ""
+            return f"{country}, {city}" if city else country
+        except AddressNotFoundError:
+            return "Sin datos"
+        except Exception:
+            return "Sin datos"
+
+    return lookup
+
+
+def generate_report(conn: sqlite3.Connection, stats: dict, geoip_lookup: Callable[[str], str] | None = None) -> str:
     top_ips = get_top_ips(conn)
 
     risk = calculate_risk(
@@ -284,9 +332,11 @@ def generate_report(conn: sqlite3.Connection, stats: dict) -> str:
 
     if top_ips:
         for ip, jail, total_events, first_seen, last_seen in top_ips:
+            location = geoip_lookup(ip) if geoip_lookup else None
+            location_text = f" | GeoIP: {location}" if location else ""
             lines.append(
                 f"- {ip} | Jail: {jail} | Eventos: {total_events} | "
-                f"Primera vez: {first_seen} | Última vez: {last_seen}"
+                f"Primera vez: {first_seen} | Última vez: {last_seen}{location_text}"
             )
     else:
         lines.append("- No hay IPs registradas todavía.")
@@ -361,6 +411,7 @@ def main() -> None:
     setup_logging(effective_log_level)
     ensure_directories(config)
     retention_days = config.get("event_retention_days", 90)
+    geoip_city_db_path = config.get("geoip_city_db_path", "") or discover_geoip_city_db_path()
     db_path = ":memory:" if args.dry_run else config["database_path"]
     conn = connect_db(db_path)
 
@@ -374,7 +425,8 @@ def main() -> None:
             pruned_count = prune_old_events(conn, retention_days)
             log_event("events_pruned", deleted=pruned_count, retention_days=retention_days)
 
-        report = generate_report(conn, stats)
+        geoip_lookup = build_geoip_lookup(geoip_city_db_path)
+        report = generate_report(conn, stats, geoip_lookup=geoip_lookup)
         print(report)
 
         if args.dry_run:

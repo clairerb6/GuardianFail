@@ -6,5 +6,6 @@
   "own_server_ip": "TU_IP_PUBLICA_OPCIONAL",
   "enable_own_server_audit": false,
   "event_retention_days": 90,
-  "log_level": "INFO"
+  "log_level": "INFO",
+  "geoip_city_db_path": ""
 }

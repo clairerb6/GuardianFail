@@ -12,3 +12,4 @@ reports/*.txt
 reports/*.md
 
 *.log
+GeoIP/**/

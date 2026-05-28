@@ -125,7 +125,8 @@ Editar config.json con los datos correspondientes:
   "own_server_ip": "",
   "enable_own_server_audit": false,
   "event_retention_days": 90,
-  "log_level": "INFO"
+  "log_level": "INFO",
+  "geoip_city_db_path": ""
 }
 ```
 ---
@@ -173,6 +174,18 @@ Top IPs registradas:
 
 Además, GuardianFail aplica retención automática en la tabla `events` según `event_retention_days` y mantiene un índice en `event_datetime` para optimizar la limpieza de eventos antiguos.
 ---
+
+
+## 🌍 GeoIP opcional
+
+GuardianFail puede enriquecer el bloque de `Top IPs` con país/ciudad usando base local de MaxMind.
+
+- Descarga GeoLite2 City desde MaxMind (requiere cuenta gratuita): https://dev.maxmind.com/geoip/geolite2-free-geolocation-data
+- Descomprime la base y deja el archivo `GeoLite2-City.mmdb` dentro de `GeoIP/` (en cualquier subcarpeta), o define la ruta en `geoip_city_db_path`.
+- Las bases GeoIP no deben versionarse en Git por tamaño/actualización frecuente.
+
+Si no hay base disponible, el sistema sigue funcionando sin detenerse.
+
 ## 📲 Notificación por Telegram
 
 GuardianFail puede enviar el reporte automáticamente a un chat de Telegram mediante un bot.

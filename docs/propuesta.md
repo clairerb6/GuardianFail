@@ -68,6 +68,8 @@ El reporte puede ser visualizado en consola, almacenado como archivo de texto y 
 
 La solución contempla una política de retención configurable (`event_retention_days`) que elimina eventos antiguos de la tabla `events` en cada ejecución. Para optimizar esta limpieza, se utiliza un índice en `event_datetime`.
 
+El sistema también permite enriquecimiento opcional de IPs con geolocalización aproximada (GeoIP) para el bloque de Top IPs en el reporte.
+
 ---
 
 ## 7. Tecnologías utilizadas
@@ -196,6 +198,12 @@ Configuración relevante del archivo JSON:
 ---
 
 ## 10.2 Calidad y pruebas automatizadas
+
+Referencias de implementación GeoIP:
+- Base recomendada: GeoLite2 City de MaxMind (uso gratuito con registro).
+- Fuente oficial de descarga: https://dev.maxmind.com/geoip/geolite2-free-geolocation-data
+- La base debe mantenerse fuera del repositorio y actualizarse periódicamente por quien despliega la herramienta.
+
 
 El proyecto incluye pruebas automatizadas con `unittest` para componentes críticos:
 

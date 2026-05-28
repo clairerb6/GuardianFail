@@ -6,8 +6,11 @@ import unittest
 from unittest.mock import patch
 
 from guardianfail import (
+    build_geoip_lookup,
     calculate_risk,
     connect_db,
+    discover_geoip_city_db_path,
+    generate_report,
     load_config,
     parse_args,
     parse_fail2ban_log,
@@ -71,6 +74,7 @@ class GuardianFailTests(unittest.TestCase):
             "enable_own_server_audit": False,
             "event_retention_days": 90,
             "log_level": "INFO",
+            "geoip_city_db_path": "",
         }
 
         with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
@@ -98,6 +102,19 @@ class GuardianFailTests(unittest.TestCase):
             "fail2ban_log": "sample/fail2ban-sample.log",
             "database_path": "data/guardianfail.db",
             "log_level": "TRACE",
+        }
+        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
+            json.dump(config_data, f)
+            config_path = f.name
+
+        with self.assertRaises(ValueError):
+            load_config(config_path)
+
+    def test_load_config_rejects_invalid_geoip_path_type(self):
+        config_data = {
+            "fail2ban_log": "sample/fail2ban-sample.log",
+            "database_path": "data/guardianfail.db",
+            "geoip_city_db_path": 123,
         }
         with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
             json.dump(config_data, f)
@@ -156,6 +173,33 @@ class GuardianFailTests(unittest.TestCase):
         self.assertTrue(args.dry_run)
         self.assertTrue(args.no_telegram)
         self.assertEqual(args.log_level, "DEBUG")
+
+    def test_discover_geoip_city_db_path_returns_empty_if_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(discover_geoip_city_db_path(tmp), "")
+
+    def test_build_geoip_lookup_returns_none_if_missing_path(self):
+        self.assertIsNone(build_geoip_lookup("/tmp/no-existe.mmdb"))
+
+    def test_generate_report_includes_geoip_when_lookup_available(self):
+        conn = connect_db(":memory:")
+        try:
+            conn.execute(
+                """
+                INSERT INTO banned_ips (ip, jail, first_seen, last_seen, total_events)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("8.8.8.8", "sshd", "2026-05-27 12:00:00", "2026-05-27 13:00:00", 2),
+            )
+            conn.commit()
+            report = generate_report(
+                conn,
+                {"new_ips": [], "repeated_ips": ["8.8.8.8"], "total_events": 2},
+                geoip_lookup=lambda _: "United States, Mountain View",
+            )
+            self.assertIn("GeoIP: United States, Mountain View", report)
+        finally:
+            conn.close()
 
 
 if __name__ == "__main__":
